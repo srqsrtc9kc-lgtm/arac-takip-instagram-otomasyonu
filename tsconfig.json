@@ -1,248 +1,41 @@
-import 'server-only';
-import type { ContentType } from '../types';
-
-const configuredVersion = process.env.META_GRAPH_VERSION || 'v25.0';
-const GRAPH_VERSION = /^v\d+\.\d+$/.test(configuredVersion) ? configuredVersion : 'v25.0';
-const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
-
-interface MetaEnv {
-  ok: boolean;
-  missing: string[];
-  accessToken: string;
-  igUserId: string;
-}
-
-export interface PublishToInstagramParams {
-  contentType: ContentType;
-  caption: string | null;
-  imageUrl: string | null;
-  mediaUrls: string[];
-  videoUrl: string | null;
-  alreadyPublishedStoryIds?: string[];
-  onPublishAttempt?: () => Promise<void>;
-  onStoryItemPublished?: (ids: string[]) => Promise<void>;
-}
-
-export interface PublishResult {
-  instagramPostId: string;
-  instagramPostIds: string[];
-  containerIds: string[];
-}
-
-export function getMetaEnv(): MetaEnv {
-  const accessToken = process.env.META_ACCESS_TOKEN ?? '';
-  const igUserId = process.env.IG_USER_ID ?? '';
-  const missing: string[] = [];
-  if (!accessToken) missing.push('META_ACCESS_TOKEN');
-  if (!igUserId) missing.push('IG_USER_ID');
-  return { ok: missing.length === 0, missing, accessToken, igUserId };
-}
-
-export function isMetaConfigured(): boolean {
-  return getMetaEnv().ok;
-}
-
-function sanitize(message: string, token: string): string {
-  return token ? message.split(token).join('[GİZLİ]') : message;
-}
-
-interface GraphError {
-  message?: string;
-  code?: number;
-  error_subcode?: number;
-}
-
-function hintFor(err: GraphError | undefined): string {
-  if (!err) return '';
-  const code = err.code;
-  const sub = err.error_subcode;
-  if (code === 190)
-    return 'Erişim tokenı geçersiz veya süresi dolmuş — Meta panelinden yenileyin. ';
-  if (code === 10 || (code !== undefined && code >= 200 && code <= 299))
-    return 'Token izinleri yetersiz — instagram_content_publish izni gerekli. ';
-  if (code === 4 || code === 17 || code === 32 || code === 613)
-    return 'Meta API istek limiti aşıldı — bir süre bekleyip yeniden deneyin. ';
-  if (sub === 2207003 || sub === 2207026 || code === 9004)
-    return 'Meta medyayı indiremedi — görsel/video URL herkese açık olmalı. ';
-  return '';
-}
-
-async function graphFetch(
-  url: string,
-  init: RequestInit,
-  token: string
-): Promise<Record<string, unknown>> {
-  let response: Response;
-  try {
-    response = await fetch(url, { ...init, cache: 'no-store' });
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : 'bağlantı hatası';
-    throw new Error(sanitize('Meta API isteği gönderilemedi: ' + detail, token));
-  }
-
-  const json = (await response.json().catch(() => null)) as
-    | (Record<string, unknown> & { error?: GraphError })
-    | null;
-  if (!response.ok || json?.error) {
-    const err = json?.error;
-    const detail = err?.message
-      ? `${err.message} (kod ${err.code ?? '?'}${err.error_subcode ? '/' + err.error_subcode : ''})`
-      : `HTTP ${response.status}`;
-    throw new Error(sanitize(`${hintFor(err)}Meta API hatası: ${detail}`, token));
-  }
-  return json ?? {};
-}
-
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function createContainer(
-  igUserId: string,
-  accessToken: string,
-  values: Record<string, string>
-): Promise<string> {
-  const form = new URLSearchParams(values);
-  form.set('access_token', accessToken);
-  const created = await graphFetch(
-    `${GRAPH_BASE}/${igUserId}/media`,
-    { method: 'POST', body: form },
-    accessToken
-  );
-  const id = created.id ? String(created.id) : '';
-  if (!id) throw new Error('Meta medya container kimliği döndürmedi.');
-  return id;
-}
-
-async function waitUntilReady(
-  containerId: string,
-  accessToken: string,
-  kind: 'image' | 'video' = 'image'
-) {
-  const attempts = kind === 'video' ? 60 : 20;
-  const delay = kind === 'video' ? 3000 : 2000;
-  let status = '';
-
-  for (let i = 0; i < attempts; i++) {
-    const result = await graphFetch(
-      `${GRAPH_BASE}/${containerId}?fields=status_code`,
-      { method: 'GET', headers: { Authorization: `Bearer ${accessToken}` } },
-      accessToken
-    );
-    status = typeof result.status_code === 'string' ? result.status_code : '';
-    if (status === 'FINISHED') return;
-    if (status === 'ERROR' || status === 'EXPIRED') {
-      throw new Error(`Meta medyayı işleyemedi (durum: ${status}).`);
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": [
+        "./*"
+      ]
     }
-    await wait(delay);
-  }
-  throw new Error(
-    kind === 'video'
-      ? 'Reels videosunun Meta tarafından işlenmesi zaman aşımına uğradı.'
-      : 'Görselin Meta tarafından işlenmesi zaman aşımına uğradı.'
-  );
-}
-
-async function publishContainer(
-  igUserId: string,
-  accessToken: string,
-  containerId: string
-): Promise<string> {
-  const form = new URLSearchParams({ creation_id: containerId, access_token: accessToken });
-  const published = await graphFetch(
-    `${GRAPH_BASE}/${igUserId}/media_publish`,
-    { method: 'POST', body: form },
-    accessToken
-  );
-  const id = published.id ? String(published.id) : '';
-  if (!id) throw new Error('Meta yayın kimliği döndürmedi.');
-  return id;
-}
-
-/**
- * Instagram Content Publishing API ile bütün desteklenen formatları yayınlar.
- * Onay kontrolü burada değil /api/publish katmanında yapılır.
- */
-export async function publishToInstagram(
-  params: PublishToInstagramParams
-): Promise<PublishResult> {
-  const env = getMetaEnv();
-  if (!env.ok) throw new Error('Meta API bilgileri eksik: ' + env.missing.join(', '));
-  const { accessToken, igUserId } = env;
-
-  if (params.contentType === 'reels') {
-    if (!params.videoUrl) throw new Error('Reels videosu eksik.');
-    const containerId = await createContainer(igUserId, accessToken, {
-      media_type: 'REELS',
-      video_url: params.videoUrl,
-      share_to_feed: 'true',
-      ...(params.caption ? { caption: params.caption } : {}),
-    });
-    await waitUntilReady(containerId, accessToken, 'video');
-    await params.onPublishAttempt?.();
-    const postId = await publishContainer(igUserId, accessToken, containerId);
-    return { instagramPostId: postId, instagramPostIds: [postId], containerIds: [containerId] };
-  }
-
-  if (params.contentType === 'carousel') {
-    const urls = params.mediaUrls.filter(Boolean).slice(0, 10);
-    if (urls.length < 2) throw new Error('Carousel için en az iki görsel gerekli.');
-    const children: string[] = [];
-    for (const imageUrl of urls) {
-      const child = await createContainer(igUserId, accessToken, {
-        image_url: imageUrl,
-        is_carousel_item: 'true',
-      });
-      await waitUntilReady(child, accessToken);
-      children.push(child);
-    }
-    const parent = await createContainer(igUserId, accessToken, {
-      media_type: 'CAROUSEL',
-      children: children.join(','),
-      ...(params.caption ? { caption: params.caption } : {}),
-    });
-    await waitUntilReady(parent, accessToken);
-    await params.onPublishAttempt?.();
-    const postId = await publishContainer(igUserId, accessToken, parent);
-    return {
-      instagramPostId: postId,
-      instagramPostIds: [postId],
-      containerIds: [...children, parent],
-    };
-  }
-
-  if (params.contentType === 'story') {
-    const urls = (params.mediaUrls.length ? params.mediaUrls : [params.imageUrl])
-      .filter((url): url is string => Boolean(url))
-      .slice(0, 5);
-    if (urls.length === 0) throw new Error('Story görseli eksik.');
-
-    const ids = [...(params.alreadyPublishedStoryIds ?? [])];
-    const containers: string[] = [];
-    for (let i = ids.length; i < urls.length; i++) {
-      const container = await createContainer(igUserId, accessToken, {
-        media_type: 'STORIES',
-        image_url: urls[i],
-      });
-      containers.push(container);
-      await waitUntilReady(container, accessToken);
-      await params.onPublishAttempt?.();
-      ids.push(await publishContainer(igUserId, accessToken, container));
-      await params.onStoryItemPublished?.([...ids]);
-    }
-    return {
-      instagramPostId: ids[0],
-      instagramPostIds: ids,
-      containerIds: containers,
-    };
-  }
-
-  const imageUrl = params.imageUrl || params.mediaUrls[0];
-  if (!imageUrl) throw new Error('Paylaşım görseli eksik.');
-  const containerId = await createContainer(igUserId, accessToken, {
-    image_url: imageUrl,
-    ...(params.caption ? { caption: params.caption } : {}),
-  });
-  await waitUntilReady(containerId, accessToken);
-  await params.onPublishAttempt?.();
-  const postId = await publishContainer(igUserId, accessToken, containerId);
-  return { instagramPostId: postId, instagramPostIds: [postId], containerIds: [containerId] };
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
 }
