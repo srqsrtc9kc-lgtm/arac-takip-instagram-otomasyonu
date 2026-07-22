@@ -1,0 +1,48 @@
+import { NextResponse } from 'next/server';
+import { supabaseAdmin } from '@/lib/supabase/server';
+
+export const dynamic = 'force-dynamic';
+
+// GET /api/drafts → son taslakları döner (dashboard bunu kullanır)
+export async function GET() {
+  try {
+    const db = supabaseAdmin();
+    const { data, error } = await db
+      .from('content_drafts')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(30);
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    const drafts = data ?? [];
+    const draftIds = drafts.map((draft) => draft.id as string);
+    const claimStatus = new Map<string, string | null>();
+
+    if (draftIds.length > 0) {
+      const { data: claims, error: claimsError } = await db
+        .from('published_posts')
+        .select('draft_id, status')
+        .in('draft_id', draftIds);
+      if (claimsError) {
+        return NextResponse.json({ error: claimsError.message }, { status: 500 });
+      }
+      for (const claim of claims ?? []) {
+        if (claim.draft_id) claimStatus.set(String(claim.draft_id), claim.status as string | null);
+      }
+    }
+
+    return NextResponse.json({
+      drafts: drafts.map((draft) => ({
+        ...draft,
+        publish_record_status: claimStatus.get(String(draft.id)) ?? null,
+      })),
+    });
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : 'Sunucu hatası' },
+      { status: 500 }
+    );
+  }
+}

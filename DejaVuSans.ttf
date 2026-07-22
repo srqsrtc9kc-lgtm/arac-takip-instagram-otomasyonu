@@ -1,0 +1,54 @@
+import type { Metadata } from 'next';
+import Link from 'next/link';
+import './globals.css';
+
+export const metadata: Metadata = {
+  title: 'Araç Takip Paneli · IG Agent',
+  description:
+    'Post, carousel, Story ve Reels üret; ön izle, onayla ve Meta API ile paylaş.',
+};
+
+const NAV = [
+  { href: '/dashboard', label: 'Panel' },
+  { href: '/drafts', label: 'Taslaklar' },
+  { href: '/published', label: 'Yayın Kayıtları' },
+  { href: '/settings', label: 'Ayarlar' },
+];
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="tr">
+      <body className="min-h-screen bg-neutral-950 text-neutral-100 antialiased">
+        <header className="sticky top-0 z-20 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur">
+          <div className="mx-auto flex max-w-4xl items-center justify-between gap-4 px-4 py-3">
+            <Link href="/dashboard" className="shrink-0">
+              <span className="text-sm font-semibold tracking-tight text-blue-400">
+                Araç Takip Paneli
+              </span>
+              <span className="ml-2 text-xs text-neutral-500">IG Agent</span>
+            </Link>
+            <nav className="flex items-center gap-1 overflow-x-auto text-sm">
+              {NAV.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className="whitespace-nowrap rounded-md px-3 py-1.5 text-neutral-300 transition-colors hover:bg-neutral-800 hover:text-white"
+                >
+                  {item.label}
+                </Link>
+              ))}
+            </nav>
+          </div>
+        </header>
+        <main>{children}</main>
+        <footer className="mx-auto max-w-4xl px-4 py-8 text-center text-xs text-neutral-600">
+          Paylaşımlar yalnızca ön izleme sonrası açık onayla yapılır.
+        </footer>
+      </body>
+    </html>
+  );
+}
